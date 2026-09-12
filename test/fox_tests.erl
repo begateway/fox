@@ -6,17 +6,16 @@
 
 setup() ->
     application:ensure_all_started(fox),
-    fox_utils:map_to_params_network(#{host => "localhost",
-                                      port => 5672,
-                                      virtual_host => <<"/">>,
-                                      username => <<"guest">>,
-                                      password => <<"guest">>}).
+    fox_test_utils:rabbit_params().
 
 
 validate_params_network_test() ->
     Params = setup(),
     ?assertEqual(ok, fox:validate_params_network(Params)),
-    ?assertMatch({error, _}, fox:validate_params_network(Params#'amqp_params_network'{password = <<"gG5Z2pVwK4">>})),
+    Password = Params#'amqp_params_network'.password,
+    InvalidPassword = <<Password/binary, "-invalid">>,
+    ?assertMatch({error, _}, fox:validate_params_network(
+        Params#'amqp_params_network'{password = InvalidPassword})),
     ?assertThrow({invalid_amqp_params_network, "host should be string"},
                  fox:validate_params_network(Params#'amqp_params_network'{host = <<"localhost">>})),
     ?assertThrow({invalid_amqp_params_network, "username should be binary"},
