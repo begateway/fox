@@ -7,11 +7,7 @@
 
 setup() ->
     application:ensure_all_started(fox),
-    fox_utils:map_to_params_network(#{host => "localhost",
-        port => 5672,
-        virtual_host => <<"/">>,
-        username => <<"guest">>,
-        password => <<"guest">>}).
+    fox_test_utils:rabbit_params().
 
 
 start_stop_test() ->

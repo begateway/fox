@@ -106,7 +106,7 @@ init(Channel, Args) ->
     {ok, State}.
 ```
 
-**handle(Data, ChannelPid, State)** called each time new message arrives. Here you can process message, reply with `#'basic.ack'{}` or `#'basic.reject'{}`, or don't reply at all.  Function should return a new state.
+**handle(Data, ChannelPid, State)** called each time new message arrives. Here you can process message, reply with `#'basic.ack'{}` or `#'basic.reject'{}`, or don't reply at all. Function should return a new state.
 
 ```erlang
 handle({#'basic.deliver'{delivery_tag = Tag}, #amqp_msg{payload = Payload}}, ChannelPid, State) ->
@@ -128,3 +128,27 @@ terminate(ChannelPid, State) ->
 Here is a sample callback module: [sample_subs_callback](src/subscription/sample_subs_callback.erl)
 
 **fox:unsubscribe(PoolName, Ref)** removes subscription.
+
+## Tests
+
+### Requirements
+
+- Erlang/OTP 26
+- Running RabbitMQ
+
+`amqp_client 3.12.2` depends on `rabbit_common 3.12.2`, which uses the unquoted type name `maybe`. On OTP 27 this word is reserved, so the dependency does not compile.
+
+RabbitMQ connection parameters:
+
+- `FOX_RABBIT_HOST`
+- `FOX_RABBIT_PORT`
+- `FOX_RABBIT_VHOST`
+- `FOX_RABBIT_USER`
+- `FOX_RABBIT_PASSWORD`
+
+```sh
+make tests
+
+# Specify Erlang/OTP version
+ASDF_ERLANG_VERSION=26.2.5.11 make tests
+```

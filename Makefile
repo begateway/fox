@@ -1,3 +1,5 @@
+.PHONY: compile eunit ct tests console d clean clean-all
+
 compile:
 	rebar3 compile
 
@@ -7,7 +9,9 @@ eunit:
 ct:
 	rebar3 ct
 
-tests: eunit ct
+tests:
+	rebar3 eunit
+	rebar3 ct
 
 console:
 	erl -pa _build/default/lib/*/ebin -s fox test_run
@@ -21,4 +25,3 @@ clean:
 clean-all:
 	rm -rf _build
 	rm rebar.lock
-

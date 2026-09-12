@@ -41,11 +41,7 @@ end_per_suite(Config) ->
 
 -spec init_per_testcase(atom(), list()) -> list().
 init_per_testcase(Test, Config) ->
-    Params = #{host => "localhost",
-               port => 5672,
-               virtual_host => <<"/">>,
-               username => <<"guest">>,
-               password => <<"guest">>},
+    Params = fox_test_utils:rabbit_params(),
     ok = fox:create_connection_pool(Test, Params),
     [{params, Params} | Config].
 

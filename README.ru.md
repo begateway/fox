@@ -7,9 +7,9 @@
 
 ## Пул соединений
 
-**fox** позволяет создать один или несколько пулов соединений, контролирует состояние соединений, при необходимости осуществляет реконнект прозрачно для пользователя.  Реконнект происходит с exponential backoff -- нарастающим таймаутом между попытками соединения.
+**fox** позволяет создать один или несколько пулов соединений, контролирует состояние соединений, при необходимости осуществляет реконнект прозрачно для пользователя. Реконнект происходит с exponential backoff -- нарастающим таймаутом между попытками соединения.
 
-Вызов **fox:create_connection_pool(PoolName, Params)** создает пул из нескольких соединений (по умолчанию 5) с заданными параметрами.  Имя может быть _atom()_, _string()_ или _binary()_.  Параметры соединения могут быть записью [#amqp_params_network{}](https://github.com/jbrisbin/amqp_client/blob/master/include/amqp_client.hrl#L25) либо _map()_ с такими же полями.
+Вызов **fox:create_connection_pool(PoolName, Params)** создает пул из нескольких соединений (по умолчанию 5) с заданными параметрами. Имя может быть _atom()_, _string()_ или _binary()_. Параметры соединения могут быть записью [#amqp_params_network{}](https://github.com/jbrisbin/amqp_client/blob/master/include/amqp_client.hrl#L25) либо _map()_ с такими же полями.
 
 ```erlang
 Params = #{host => "localhost",
@@ -56,6 +56,7 @@ fox:publish(Channel, Exchange, RKey, <<"foobar">>)
 ```
 
 Или вместо кода:
+
 ```erlang
 BPublish = #'basic.publish'{exchange = Exchange, routing_key = RKey},
 Props = #'P_basic'{delivery_mode = 2}, %% persistent message
@@ -91,7 +92,7 @@ fox:publish(my_pool, Exchange, RougingKey, <<"Message">>)
 {ok, Ref} = fox:subscribe(my_pool, <<"my_queue">>, my_callback_module, CallbackInitArgs)
 ```
 
-Первый аргумент -- имя пула. Второй аргумент --  очередь, на которую нужно подписаться. Очередь может быть задана либо просто именем (_binary()_), либо записью _#'basic.consume'{}_. Запись используется, если требуются дополнительные параметры очереди (exclusive, nowait, no\_ack etc). Третий аргумент -- имя модуля. Четвертый -- аргументы для инициализации модуля. **subscribe** возвращает _reference()_, по которому потом можно будет отменить подписку.
+Первый аргумент -- имя пула. Второй аргумент -- очередь, на которую нужно подписаться. Очередь может быть задана либо просто именем (_binary()_), либо записью _#'basic.consume'{}_. Запись используется, если требуются дополнительные параметры очереди (exclusive, nowait, no\_ack etc). Третий аргумент -- имя модуля. Четвертый -- аргументы для инициализации модуля. **subscribe** возвращает _reference()_, по которому потом можно будет отменить подписку.
 
 Callback модуль должен определить 3 функции:
 
@@ -125,6 +126,30 @@ terminate(Channel, State) ->
     ok.
 ```
 
-Библиотека включает пример модуля, реализующего  **fox_subs_worker**: [sample_subs_callback](src/subscription/sample_subs_callback.erl)
+Библиотека включает пример модуля, реализующего **fox_subs_worker**: [sample_subs_callback](src/subscription/sample_subs_callback.erl)
 
 Вызов **fox:unsubscribe(PoolName, Ref)** удаляет подписку.
+
+## Тесты
+
+### Требования
+
+- Erlang/OTP 26
+- Запущенный RabbitMQ
+
+`amqp_client 3.12.2` зависит от `rabbit_common 3.12.2`, в котором используется имя типа `maybe` без кавычек. На OTP 27 это слово зарезервировано, поэтому зависимость не компилируется.
+
+Параметры подключения к RabbitMQ:
+
+- `FOX_RABBIT_HOST`
+- `FOX_RABBIT_PORT`
+- `FOX_RABBIT_VHOST`
+- `FOX_RABBIT_USER`
+- `FOX_RABBIT_PASSWORD`
+
+```sh
+make tests
+
+# Указываем версию Erlang/OTP
+ASDF_ERLANG_VERSION=26.2.5.11 make tests
+```
