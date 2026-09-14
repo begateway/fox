@@ -23,7 +23,8 @@ all() ->
         subscribe_2_queues_test,
         subscribe_state_test,
         subs_worker_crash_test,
-        channel_crash_test
+        channel_crash_test,
+        missing_queue_retry_test
     ].
 
 
@@ -400,10 +401,49 @@ channel_crash_test(_Config) ->
         {1, Q, init, Args},
         {2, Q, handle_basic_deliver, <<"Event 1">>},
         {3, Q, handle_basic_deliver, <<"Event 2">>},
-        {4, Q, init, Args},
-        {5, Q, handle_basic_deliver, <<"Event 3">>}
+        {4, Q, terminate},
+        {5, Q, init, Args},
+        {6, Q, handle_basic_deliver, <<"Event 3">>}
     ], get_subs_log(T)),
     ok.
+
+
+%% Infrastructure creates the queue only after the initial consume fails.
+%% This exercises the real amqp_client exit shape without changing permissions.
+-spec missing_queue_retry_test(list()) -> ok.
+missing_queue_retry_test(_Config) ->
+    Pool = missing_queue_retry_test,
+    Queue = iolist_to_binary(["fox-retry-", integer_to_list(erlang:unique_integer([positive]))]),
+    {ok, Ref} = fox:subscribe(Pool, Queue, retry_integration_callback, self()),
+    #subs_meta{subs_worker = Pid} = fox_conn_pool:get_subs_meta(Pool, Ref),
+    FailedChannel = receive
+        {subscription_terminate, Pid, Channel} -> Channel
+    after 5000 -> error(no_failed_consume_cleanup)
+    end,
+    #subscription{channel = undefined, channel_ref = undefined,
+                  subs_state = undefined, retry_attempt = Attempt,
+                  connection = Conn} = sys:get_state(Pid),
+    ?assertNot(is_process_alive(FailedChannel)),
+    ?assert(Attempt > 0),
+    {ok, Admin} = amqp_connection:open_channel(Conn),
+    try
+        #'queue.declare_ok'{} = amqp_channel:call(Admin, #'queue.declare'{queue = Queue}),
+        #subscription{retry_attempt = 0} = await_retry_subscription(Pid, 100),
+        #'queue.declare_ok'{consumer_count = 1} =
+            amqp_channel:call(Admin, #'queue.declare'{queue = Queue, passive = true}),
+        ok = fox:unsubscribe(Pool, Ref)
+    after
+        amqp_channel:call(Admin, #'queue.delete'{queue = Queue}),
+        amqp_channel:close(Admin)
+    end,
+    ok.
+
+await_retry_subscription(_Pid, 0) -> error(subscription_retry_timeout);
+await_retry_subscription(Pid, Attempts) ->
+    case sys:get_state(Pid) of
+        #subscription{channel = Channel} = State when is_pid(Channel) -> State;
+        _ -> timer:sleep(50), await_retry_subscription(Pid, Attempts - 1)
+    end.
 
 
 -spec get_subs_log(ets:tab()) -> [tuple()].

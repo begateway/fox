@@ -24,7 +24,8 @@
     channel :: pid() | undefined,
     channel_ref :: reference() | undefined,
     subs_state :: term(),
-    subs_tag :: binary() | undefined
+    subs_tag :: binary() | undefined,
+    retry_attempt = 0 :: non_neg_integer()
 }).
 
 -record(subs_meta, {
