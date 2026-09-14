@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      rabbitmq:
+        image: rabbitmq:3.12
+        env:
+          RABBITMQ_DEFAULT_VHOST: ${{ vars.RABBIT_VHOST }}
+          RABBITMQ_DEFAULT_USER: ${{ vars.RABBIT_USER }}
+          RABBITMQ_DEFAULT_PASS: ${{ vars.RABBIT_PASSWORD }}
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Erlang setup
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "26"
+          rebar3-version: "3"
+
+      - name: Run tests
+        run: make tests
+        env:
+          FOX_RABBIT_HOST: localhost
+          FOX_RABBIT_PORT: "5672"
+          FOX_RABBIT_VHOST: ${{ vars.RABBIT_VHOST }}
+          FOX_RABBIT_USER: ${{ vars.RABBIT_USER }}
+          FOX_RABBIT_PASSWORD: ${{ vars.RABBIT_PASSWORD }}
