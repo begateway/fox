@@ -2,15 +2,20 @@
 
 -include("fox.hrl").
 
--export([reconnect/1, close_connection/1, close_channel/1, error_or_info/3]).
+-export([reconnect/1, reconnect/2, close_connection/1, close_channel/1, error_or_info/3]).
 
 
 -spec reconnect(integer()) -> ok.
 reconnect(Attempt) ->
+    reconnect(Attempt, connect).
+
+
+-spec reconnect(non_neg_integer(), term()) -> ok.
+reconnect(Attempt, Message) ->
     {ok, MaxTimeout} = application:get_env(fox, max_reconnect_timeout),
     {ok, MinTimeout} = application:get_env(fox, min_reconnect_timeout),
     Timeout = exp_backoff(Attempt, MinTimeout, MaxTimeout),
-    erlang:send_after(Timeout, self(), connect),
+    erlang:send_after(Timeout, self(), Message),
     ok.
 
 

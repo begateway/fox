@@ -19,7 +19,7 @@ start_link(State, StartOptions) ->
     gen_server:start_link(?MODULE, State, StartOptions).
 
 
--spec connection_established(pid(), pid()) -> ok.
+-spec connection_established(pid(), pid() | undefined) -> ok.
 connection_established(Pid, Conn) ->
     gen_server:cast(Pid, {connection_established, Conn}).
 
@@ -51,14 +51,10 @@ init(#subscription{ref = SubsRef, pool_name = PoolName, conn_worker = CPid} = St
 
 
 -spec handle_call(gs_request(), gs_from(), gs_reply()) -> gs_call_reply().
-handle_call(stop, _From, #subscription{channel = Channel, channel_ref = Ref} = State) ->
-    case Channel of
-        undefined -> do_nothing;
-        _ -> erlang:demonitor(Ref)
-    end,
+handle_call(stop, _From, State) ->
     State2 = unsubscribe(State),
     logger:info("~s stop", [worker_name(State)]),
-    {stop, normal, ok, State2#subscription{channel_ref = undefined}};
+    {stop, normal, ok, State2};
 
 handle_call(Any, _From, State) ->
     logger:error("unknown call ~w in ~p", [Any, ?MODULE]),
@@ -66,36 +62,18 @@ handle_call(Any, _From, State) ->
 
 
 -spec handle_cast(gs_request(), gs_state()) -> gs_cast_reply().
+handle_cast({connection_established, undefined}, State) ->
+    {noreply, State};
+
 handle_cast({connection_established, Conn},
-    #subscription{
-        basic_consume = BasicConsume,
-        subs_module = Module,
-        subs_args = Args}
-        = State) ->
-    WorkerName = worker_name(State),
-    logger:info("~s connection_established Conn:~p", [WorkerName, Conn]),
+    #subscription{connection = Conn} = State) ->
+    %% Must not disturb an active subscription or retry
+    {noreply, State};
+
+handle_cast({connection_established, Conn}, State) ->
+    logger:info("~s connection_established Conn:~p", [worker_name(State), Conn]),
     State2 = unsubscribe(State),
-
-    case amqp_connection:open_channel(Conn) of
-        {ok, Channel} ->
-            State3 = State2#subscription{connection = Conn},
-            logger:info("~s subscribe to queue Channel:~p", [worker_name(State3), Channel]),
-
-            Ref = erlang:monitor(process, Channel),
-            {ok, SubsState} = Module:init(Channel, Args),
-
-            #'basic.consume_ok'{consumer_tag = Tag} =
-                amqp_channel:subscribe(Channel, BasicConsume, self()),
-
-            {noreply, State3#subscription{
-                        channel = Channel,
-                        channel_ref = Ref,
-                        subs_state = SubsState,
-                        subs_tag = Tag}};
-        Other ->
-            logger:info("~s can't subscribe to queue, reason: ~w", [WorkerName, Other]),
-            {noreply, State2}
-    end;
+    {noreply, subscribe(State2#subscription{connection = Conn, retry_attempt = 0})};
 
 
 handle_cast(Any, State) ->
@@ -113,24 +91,22 @@ handle_info({#'basic.deliver'{}, #amqp_msg{}} = Msg, State) ->
 handle_info(#'basic.cancel'{} = Msg, State) ->
     {noreply, handle(Msg, State)};
 
-handle_info({'DOWN', _Ref, process, _Channel, normal}, State) ->
-    logger:error("~s channel has closed", [worker_name(State)]),
-    {noreply, State#subscription{channel = undefined, channel_ref = undefined}};
+handle_info({subscribe_retry, Conn},
+            #subscription{connection = Conn, channel = undefined} = State) ->
+    {noreply, subscribe(State)};
+
+handle_info({subscribe_retry, _Conn}, State) ->
+    {noreply, State};
 
 handle_info({'DOWN', Ref, process, Channel, Reason},
             #subscription{
-                connection = Conn,
                 channel = Channel,
                 channel_ref = Ref
-            } = State) ->
-    fox_priv_utils:error_or_info(Reason, "~s, channel is DOWN: ~w", [worker_name(State), Reason]),
+            } = State) when is_reference(Ref) ->
+    {noreply, retry({channel_down, Reason}, State)};
 
-    ConnectionAlive = is_process_alive(Conn),
-    if
-        ConnectionAlive -> connection_established(self(), Conn);
-        true -> do_nothing
-    end,
-    {noreply, State#subscription{channel = undefined, channel_ref = undefined}};
+handle_info({'DOWN', _Ref, process, _Channel, _Reason}, State) ->
+    {noreply, State};
 
 handle_info(Request, State) ->
     logger:error("~s unknown info ~w", [worker_name(State), Request]),
@@ -177,16 +153,83 @@ worker_name(
                 ),
     unicode:characters_to_binary(FullName).
 
+subscribe(#subscription{connection = Conn} = State) ->
+    case is_process_alive(Conn) of
+        false -> State;
+        true -> open_channel(State)
+    end.
+
+open_channel(#subscription{
+    connection = Conn,
+    subs_module = Module,
+    subs_args = Args}
+    = State) ->
+    case catch amqp_connection:open_channel(Conn) of
+        {ok, Channel} when is_pid(Channel) ->
+            Ref = erlang:monitor(process, Channel),
+            {ok, SubsState} = Module:init(Channel, Args),
+            consume(State#subscription{
+                        channel = Channel,
+                        channel_ref = Ref,
+                        subs_state = SubsState});
+        Failure ->
+            retry({open_channel, Failure}, State)
+    end.
+
+consume(#subscription{
+    channel = Channel,
+    basic_consume = BasicConsume}
+    = State) ->
+    case catch amqp_channel:subscribe(Channel, BasicConsume, self()) of
+        #'basic.consume_ok'{consumer_tag = Tag} ->
+            logger:info("~s has subscribed to queue", [worker_name(State)]),
+            State#subscription{subs_tag = Tag, retry_attempt = 0};
+        Failure ->
+            retry({basic_consume, Failure}, State)
+    end.
+
+retry(Reason,
+    #subscription{
+        connection = Conn,
+        retry_attempt = Attempt}
+        = State) ->
+    State2 = unsubscribe(State),
+    case is_process_alive(Conn) of
+        false -> State2;
+        true ->
+            logger:warning("~s subscription retry attempt ~p: ~w",
+                           [worker_name(State2), Attempt + 1, Reason]),
+            fox_priv_utils:reconnect(Attempt, {subscribe_retry, Conn}),
+            State2#subscription{retry_attempt = Attempt + 1}
+    end.
+
 unsubscribe(#subscription{channel = undefined} = State) ->
     State;
 unsubscribe(#subscription{
     channel = Channel,
+    channel_ref = Ref,
     subs_module = Module,
     subs_state = SubsState,
     subs_tag = Tag}
     = State) ->
     logger:info("~s unsubscribe from queue", [worker_name(State)]),
-    fox_utils:channel_call(Channel, #'basic.cancel'{consumer_tag = Tag}),
-    Module:terminate(Channel, SubsState),
+    erlang:demonitor(Ref, [flush]),
+    case Tag of
+        undefined -> ok;
+        _ -> fox_utils:channel_call(Channel, #'basic.cancel'{consumer_tag = Tag})
+    end,
+    terminate_callback(Module, Channel, SubsState, State),
     fox_priv_utils:close_channel(Channel),
-    State#subscription{channel = undefined}.
+    State#subscription{
+        channel = undefined,
+        channel_ref = undefined,
+        subs_state = undefined,
+        subs_tag = undefined
+    }.
+
+terminate_callback(Module, Channel, SubsState, State) ->
+    case catch Module:terminate(Channel, SubsState) of
+        {'EXIT', Reason} ->
+            logger:error("~s callback terminate failed: ~p", [worker_name(State), Reason]);
+        _ -> ok
+    end.
